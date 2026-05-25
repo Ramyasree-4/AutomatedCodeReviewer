@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { traceable } from "langsmith/traceable";
 import { connectDatabase, isDatabaseConnected } from "./db.js";
 import { Review } from "./models/Review.js";
 
@@ -14,6 +15,7 @@ const app = express();
 const port = process.env.PORT || 5000;
 const model = process.env.MISTRAL_MODEL || "mistral-large-latest";
 const clientDistPath = path.join(__dirname, "..", "dist");
+const langSmithEnabled = process.env.LANGSMITH_TRACING === "true" && Boolean(process.env.LANGSMITH_API_KEY);
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -111,8 +113,60 @@ function extractJson(text) {
   }
 }
 
+async function callMistralReview({ language, framework, code, focus }) {
+  const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content: "You return strict JSON for code review results."
+        },
+        {
+          role: "user",
+          content: reviewPrompt({
+            language: framework ? `${language} / ${framework}` : language,
+            code,
+            focus
+          })
+        }
+      ]
+    })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const message = data?.message || data?.error?.message || "Mistral API request failed.";
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
+const tracedMistralReview = langSmithEnabled
+  ? traceable(callMistralReview, {
+      name: "Mistral Code Review",
+      run_type: "llm",
+      project_name: process.env.LANGSMITH_PROJECT || "automated-code-reviewer"
+    })
+  : callMistralReview;
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, model, database: isDatabaseConnected() ? "connected" : "not configured" });
+  res.json({
+    ok: true,
+    model,
+    database: isDatabaseConnected() ? "connected" : "not configured",
+    langsmith: langSmithEnabled ? "enabled" : "disabled"
+  });
 });
 
 app.get("/api/reviews", async (_req, res) => {
@@ -140,36 +194,7 @@ app.post("/api/review", async (req, res) => {
   }
 
   try {
-    const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.MISTRAL_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content: "You return strict JSON for code review results."
-          },
-          {
-            role: "user",
-            content: reviewPrompt({ language: framework ? `${language} / ${framework}` : language, code, focus })
-          }
-        ]
-      })
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: data?.message || data?.error?.message || "Mistral API request failed."
-      });
-    }
-
+    const data = await tracedMistralReview({ language, framework, code, focus });
     const content = data?.choices?.[0]?.message?.content || "";
     const parsed = extractJson(content);
 
@@ -195,7 +220,7 @@ app.post("/api/review", async (req, res) => {
 
     res.json(parsed);
   } catch (error) {
-    res.status(500).json({ error: error.message || "Unexpected server error." });
+    res.status(error.status || 500).json({ error: error.message || "Unexpected server error." });
   }
 });
 
