@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight,
@@ -251,6 +251,27 @@ function Dashboard({ user }) {
     ["Maintainability score", review ? review.maintainabilityScore ?? Math.min(100, score + 4) : "--"]
   ];
 
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const response = await fetch("http://localhost:5000/api/reviews");
+        const data = await response.json();
+        if (!Array.isArray(data) || !data.length) return;
+
+        setHistoryItems(data.map((item) => [
+          item.framework ? `${item.framework} review` : `${item.language || "Code"} review`,
+          item.language || "Unknown",
+          `Score ${item.score ?? "N/A"}`,
+          new Date(item.createdAt).toLocaleDateString()
+        ]));
+      } catch {
+        // History stays local when the backend or MongoDB is unavailable.
+      }
+    }
+
+    loadHistory();
+  }, []);
+
   const runReview = async () => {
     setLoading(true);
     setError("");
@@ -260,7 +281,7 @@ function Dashboard({ user }) {
       const response = await fetch("http://localhost:5000/api/review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, language, focus })
+        body: JSON.stringify({ code, language, framework, focus })
       });
       const data = await response.json();
 

@@ -1,6 +1,8 @@
 import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
+import { connectDatabase, isDatabaseConnected } from "./db.js";
+import { Review } from "./models/Review.js";
 
 dotenv.config();
 
@@ -10,6 +12,8 @@ const model = process.env.MISTRAL_MODEL || "mistral-large-latest";
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+
+await connectDatabase();
 
 const reviewPrompt = ({ language, code, focus }) => `
 You are a senior automated code reviewer. Review the submitted code with practical, production-minded feedback.
@@ -103,11 +107,24 @@ function extractJson(text) {
 }
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, model });
+  res.json({ ok: true, model, database: isDatabaseConnected() ? "connected" : "not configured" });
+});
+
+app.get("/api/reviews", async (_req, res) => {
+  if (!isDatabaseConnected()) {
+    return res.json([]);
+  }
+
+  const reviews = await Review.find()
+    .sort({ createdAt: -1 })
+    .limit(25)
+    .select("language framework summary score securityScore performanceScore maintainabilityScore riskLevel deploymentReadiness status verdict issueCounts createdAt");
+
+  res.json(reviews);
 });
 
 app.post("/api/review", async (req, res) => {
-  const { code, language, focus } = req.body || {};
+  const { code, language, framework, focus } = req.body || {};
 
   if (!process.env.MISTRAL_API_KEY) {
     return res.status(500).json({ error: "Missing MISTRAL_API_KEY in .env" });
@@ -134,7 +151,7 @@ app.post("/api/review", async (req, res) => {
           },
           {
             role: "user",
-            content: reviewPrompt({ language, code, focus })
+            content: reviewPrompt({ language: framework ? `${language} / ${framework}` : language, code, focus })
           }
         ]
       })
@@ -158,6 +175,16 @@ app.post("/api/review", async (req, res) => {
         issues: [],
         strengths: [],
         nextSteps: ["Try again with a smaller code sample."]
+      });
+    }
+
+    if (isDatabaseConnected()) {
+      await Review.create({
+        ...parsed,
+        language,
+        framework,
+        focus,
+        codePreview: code.slice(0, 1200)
       });
     }
 
