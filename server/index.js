@@ -1,14 +1,19 @@
 import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { connectDatabase, isDatabaseConnected } from "./db.js";
 import { Review } from "./models/Review.js";
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const app = express();
 const port = process.env.PORT || 5000;
 const model = process.env.MISTRAL_MODEL || "mistral-large-latest";
+const clientDistPath = path.join(__dirname, "..", "dist");
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -192,6 +197,12 @@ app.post("/api/review", async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message || "Unexpected server error." });
   }
+});
+
+app.use(express.static(clientDistPath));
+
+app.get("*", (_req, res) => {
+  res.sendFile(path.join(clientDistPath, "index.html"));
 });
 
 app.listen(port, () => {
