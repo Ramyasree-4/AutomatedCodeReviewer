@@ -27,6 +27,8 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
+const apiBaseUrl = import.meta.env.VITE_API_URL || "";
+
 const sampleCode = `function total(items) {
   let sum = 0
   for (let i = 0; i <= items.length; i++) {
@@ -254,7 +256,7 @@ function Dashboard({ user }) {
   useEffect(() => {
     async function loadHistory() {
       try {
-        const response = await fetch("/api/reviews");
+        const response = await fetch(`${apiBaseUrl}/api/reviews`);
         const data = await response.json();
         if (!Array.isArray(data) || !data.length) return;
 
@@ -278,7 +280,7 @@ function Dashboard({ user }) {
     setReview(null);
 
     try {
-      const response = await fetch("/api/review", {
+      const response = await fetch(`${apiBaseUrl}/api/review`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code, language, framework, focus })
